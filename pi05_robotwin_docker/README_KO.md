@@ -1,0 +1,137 @@
+# RoboTwin π0.5 — Docker / A100 80GB × 4 / adapt_to_pi=False
+
+다른 서버에서 GitHub 코드를 clone하고, 별도 데이터 ZIP을 복원한 뒤 Docker로
+학습하는 프로젝트다. 기존 서버의 `adapt_to_pi=True` 학습과는 별도 실험이며
+공식 `pi05_base`에서 새로 시작한다. 기존 True 체크포인트를 재사용하지 않는다.
+
+## 실행 준비
+
+- Linux x86_64, 한 서버의 **A100 80GB 4장**. 이 네 장이 컨테이너에 보여야 한다.
+- Docker Engine, Compose v2.30 이상, NVIDIA Container Toolkit, 호스트 GPU 드라이버.
+  CUDA 12.8 wheel 환경이며 GPU 런타임 검사는 아래 명령으로 별도 수행한다.
+- CPU RAM은 160GB 이상을 권장한다. 실제 최대치는 첫 모델 초기화 후 확인한다.
+- 저장 공간: 원본 데이터·가중치 합계 약 **514.4 GiB**. 압축본을 함께 보관하고
+  중간 체크포인트도 남기려면 **여유 공간 2TB 이상**을 권장한다.
+- 저장소 접근 권한과 ZIP 또는 비공개 Hugging Face 데이터셋 접근 권한.
+  비밀번호·토큰은 Git, Dockerfile, 데이터 ZIP에 넣지 않는다.
+
+호스트의 드라이버와 Docker/NVIDIA 런타임 설치는 컨테이너 안에서 대신할 수 없다.
+[NVIDIA 설치 문서](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+
+## 새 서버에서 시작
+
+GitHub 저장소에서 학습 폴더로 이동한다.
+
+```bash
+git clone https://github.com/DONGSANSUNJAE/CVPR_VLA_2027.git
+cd CVPR_VLA_2027/pi05_robotwin_docker
+
+# 전달받은 payload-000.zip ... 파일들과 payload_manifest.json이 있는 폴더
+python3 tools/restore_payload.py --archives /path/to/archives --output payload
+
+# Docker 이미지 빌드와 백그라운드 학습 시작
+bash tools/start.sh
+```
+
+첫 이미지 빌드는 잠긴 의존성을 다운로드하므로 인터넷이 필요하다. 이미지와
+payload 준비 후 학습 과정에는 Hub 로그인이 필요 없다. `start.sh`는 로그를
+보여주며, 여기서 Ctrl+C해도 백그라운드 컨테이너의 학습은 계속된다.
+
+직접 나누어 검사하고 실행하려면:
+
+```bash
+mkdir -p outputs
+docker compose build
+docker compose run --rm train preflight
+docker compose run --rm train gpu-check
+docker compose up -d train
+docker compose logs -f --tail 50 train
+```
+
+`preflight`는 전체 index·정규화·초기 가중치 해시와 50과제의 입력 변환을 검사한다.
+`gpu-check`는 네 GPU의 BF16 연산·역전파·장치 간 통신을 검사한다. 이 검사를
+통과해도 전체 모델의 첫 학습 업데이트까지 통과했다는 뜻은 아니다.
+
+## 중지·재시작·지표
+
+```bash
+docker compose stop -t 1800 train
+docker compose up -d train
+tail -f outputs/logs/metrics.jsonl
+cat outputs/logs/train_status.json
+```
+
+정상 SIGTERM이면 현재 업데이트 종료 후 체크포인트를 저장한다. 강제 kill이나
+서버 전원 종료에서는 마지막으로 저장 완료된 체크포인트까지만 복구된다.
+동일 코드·배치 설정으로 resume하며 출력 경로는 `outputs/checkpoints/`다.
+기존 True 체크포인트나 다른 recipe의 출력 디렉터리를 넣으면 중단한다.
+학습 실패 후 자동 재시작·재제출은 하지 않는다. Docker에는 Slurm 72시간 제한이 없다.
+
+## 고정한 학습 조건
+
+| 항목 | 값 |
+|---|---|
+| 데이터 | 50과제 × (clean 50 + randomized 500) = 27,500 에피소드 |
+| 모델 | JAX π0.5 full FT, 공식 pi05_base |
+| Aloha 변환 | **adapt_to_pi=False**, 학습·정규화·추론 동일 |
+| 행동 | 팔 12개 관절 delta, 그리퍼 2개 absolute, horizon50 |
+| 전역 배치 | 64 = microbatch4 × accumulation16 |
+| 업데이트 | 60,000 |
+| optimizer | AdamW β1=.9, β2=.95, eps=1e-8, wd=1e-10, 평균 gradient clip=1.0 |
+| LR | warmup1,000; cosine peak2.5e-5 → 2.5e-6, decay60,000 |
+| EMA / seed | .99 / 42 |
+| 저장 | step10, 이후 1,000마다, 마지막·정상 중지 때 |
+| 보존 | 최신 + 5,000의 배수; 전부 보관하면 60k까지 약500GiB 추가 예상 |
+
+코드는 기존 실행기의 4 GPU FSDP·gradient accumulation 경로를 사용한다.
+원 논문의 미공개 전처리까지 동일함을 주장하지 않는다. 4 GPU 각각에 전체 배치
+64를 독립 학습시키는 방식이 아니라, 모델·optimizer를 분할하고 64표본당 한 번
+optimizer를 갱신한다. microbatch별 난수는 원본 큰 배치 연산과 비트 단위로 같지 않다.
+
+`False` 정규화는 전 학습 시작점 6,075,103개와 horizon50의 action303,755,150개를
+다시 계산했다. 수치와 해시는 `app/assets/.../norm_stats_provenance.json`에 있다.
+
+## 데이터 전달 경로
+
+GitHub에는 코드·작은 설정·정규화만 올린다. 500GiB가 넘는 데이터와 가중치는
+GitHub 일반 저장소나 Docker 이미지에 넣지 않는다. 이 프로젝트의 `archives/`는
+독립 ZIP64 65개와 완료 manifest의 생성이 끝났다. 압축 파일 합계는
+422,792,947,055 bytes(약393.8GiB)다. 각각 약8GiB 이하의 원본을 묶고,
+손상·누락·해시 불일치가 있으면 복원을 중단한다. 복원 재실행 시 검증된 기존 파일은 재사용한다.
+
+직접 SSH 전송이 가능하면 `rsync -avP archives/ USER@HOST:/TARGET/archives/`를 쓸 수 있다.
+명령의 계정·호스트·대상 폴더는 사용자가 정한 값으로 바꾼다.
+
+Hugging Face를 경유할 경우 `huggingface_hub`가 설치된 환경에서 다음을 사용한다.
+먼저 `hf auth login` 등으로 본인의 비공개 저장소 권한을 설정한다. 도구는
+공개 저장소로 업로드하지 않으며, 데이터 이전 권한을 가진 저장소를 지정해야 한다.
+
+```bash
+# 보내는 서버: 전체 패키지 완료 후
+python tools/hub_payload.py upload --repo-id OWNER/PRIVATE_DATASET --directory archives
+# 출력된 PIN_THIS_REVISION의 commit SHA를 받는 서버에서 사용
+python tools/hub_payload.py download --repo-id OWNER/PRIVATE_DATASET \
+  --revision COMMIT_SHA --directory archives
+python3 tools/restore_payload.py --archives archives
+```
+
+Hub 업로드는 아직 수행하지 않았다. ZIP 안에는 학습 원자료와 공식 초기 가중치가
+들어가며, 원 배포물의 라이선스·이용 조건은 그대로 적용된다.
+
+## 검증 범위와 한계
+
+검증 결과는 `VALIDATION_KO.md`에 기록한다. 준비 호스트에는 Docker 엔진과
+A100 allocation이 없어 여기에서 Docker build/run 또는 A100 학습 속도를 실측하지
+못했다. Docker용 잠금 의존성은 별도 Python3.11 환경에서 CPU로 검사한다.
+
+이 저장소는 **학습 이전 패키지**다. `app/scripts/reproduce_checkpoint.py`는 수치
+재현용이며, 기존 서버의 실제 RoboTwin 영상 평가 환경·시뮬레이터 자산은 이번
+학습 payload에 포함하지 않았다. 수치 재현을 실제 영상 평가 완료로 보고하지 않는다.
+
+## 코드 출처
+
+- `app/openpi_snapshot`: 기존 실험에서 고정한 공개 OpenPI 코드. 원 라이선스 포함.
+- 새 변경: False 데이터 설정·통계, 로컬 tokenizer 사용, raw HDF5 경로에서는
+  사용하지 않는 LeRobot import 지연, Docker·payload 이전 도구.
+- 공개 학습 코드: https://github.com/Physical-Intelligence/openpi
+- 요청된 비교 논문: https://arxiv.org/abs/2603.22078

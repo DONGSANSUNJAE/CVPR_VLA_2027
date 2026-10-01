@@ -1,0 +1,6 @@
+{
+  "sha256": "530f620885be581e0b6f1133413dac8f5b82912d4b3232bb4b11b10b5e6fd055",
+  "bytes": 394780,
+  "adapt_to_pi": false,
+  "includes": "training sources and normalization; raw data and tokenizer are separate payloads"
+}

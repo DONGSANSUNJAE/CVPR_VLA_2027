@@ -1,0 +1,17 @@
+*
+!Dockerfile
+!requirements.lock
+!docker/
+!docker/entrypoint.py
+!app/
+!app/**
+app/data
+app/checkpoints
+app/runtime_pro
+app/output
+app/logs
+app/**/__pycache__
+app/**/*.pyc
+app/manifests/norm_pid.txt
+app/tokenizer/*.model
+app/openpi_snapshot/.git

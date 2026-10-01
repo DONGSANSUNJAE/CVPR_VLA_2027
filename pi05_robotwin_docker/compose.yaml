@@ -1,0 +1,36 @@
+services:
+  train:
+    build: .
+    image: pi05-robotwin-false:60k
+    gpus: all
+    shm_size: '32gb'
+    init: true
+    stop_grace_period: 30m
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PI05_EXPECTED_GPUS: '4'
+      PI05_MIN_GPU_MIB: '75000'
+      PI05_NUM_WORKERS: '8'
+    volumes:
+      - type: bind
+        source: ./payload/data
+        target: /opt/pi05/data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./payload/base
+        target: /opt/pi05/checkpoints/pi05_base
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./payload/tokenizer
+        target: /opt/pi05/tokenizer
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./outputs
+        target: /opt/pi05/output
+    command: [train]
