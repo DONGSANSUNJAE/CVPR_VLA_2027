@@ -21,16 +21,45 @@ def digest(path):
     return h.hexdigest()
 
 
-def restore(manifest_path, archives, destination):
+def restore(manifest_path, archives, destination, delete_after_restore=False):
+    """Restore every shard in the manifest into `destination`.
+
+    Default behaviour (delete_after_restore=False) is unchanged from the original
+    design: every shard's archive must be present, is re-verified by size+hash on
+    every call, and a missing archive is a hard failure. This is what the published
+    build/A100 handoff documents and tests already rely on.
+
+    delete_after_restore=True is a separate, opt-in mode for a destination disk too
+    small to hold the ZIPs and the restored payload at the same time: once a shard
+    is verified and extracted, its completion is recorded in a small state file next
+    to the payload and its archive is deleted. Later calls trust that record instead
+    of re-hashing already-restored data, and treat a shard whose archive has not
+    arrived yet as "not yet transferred" rather than an error, so the function can be
+    called again and again as archives are copied in one at a time. The trade-off:
+    once a shard is recorded complete (and very possibly its ZIP deleted), this mode
+    can no longer re-detect tampering with that shard's already-extracted files on a
+    later call, because there is nothing left to re-verify it against — only use this
+    mode when disk space genuinely requires it.
+    """
     manifest = json.loads(manifest_path.read_text())
     if manifest.get('schema') != 'pi05_portable_zip_v1' or not manifest.get('complete'):
         raise ValueError('Complete payload manifest required')
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    state_path = destination / '.restore_state.json'
+    completed = set()
+    if delete_after_restore and state_path.is_file():
+        completed = set(json.loads(state_path.read_text()))
+    pending = []
     for shard in manifest['shards']:
+        if delete_after_restore and shard['file'] in completed:
+            continue  # verified, extracted and recorded in a previous pass
         archive = archives / shard['file']
         if Path(shard['file']).name != shard['file']:
             raise ValueError('Invalid archive name')
+        if delete_after_restore and not archive.is_file():
+            pending.append(shard['file'])  # not transferred yet; retry on a later pass
+            continue
         if archive.stat().st_size != shard['bytes'] or digest(archive) != shard['sha256']:
             raise ValueError(f'Archive checksum failed: {archive}')
         expected = {f['path']: f for f in shard['files']}
@@ -63,6 +92,14 @@ def restore(manifest_path, archives, destination):
                     raise ValueError(f'Extracted checksum failed: {name}')
                 temp.replace(target)
         print('RESTORED', archive.name, flush=True)
+        if delete_after_restore:
+            completed.add(shard['file'])
+            state_path.write_text(json.dumps(sorted(completed)))
+            archive.unlink()
+    if pending:
+        preview = ', '.join(sorted(pending)[:5]) + (', ...' if len(pending) > 5 else '')
+        print(f'PARTIAL: {len(pending)} shard(s) not yet transferred: {preview}', flush=True)
+        return
     (destination / 'PAYLOAD_VERIFIED.json').write_text(json.dumps(dict(
         manifest_sha256=digest(manifest_path), episodes=manifest['episodes'])) + '\n')
     print('PAYLOAD_VERIFIED', flush=True)
@@ -72,5 +109,14 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--archives', type=Path, required=True)
     p.add_argument('--output', type=Path, default=Path('payload'))
+    p.add_argument('--delete-after-restore', action='store_true',
+                    help='Delete each archive immediately after its contents are verified and '
+                         'extracted, and trust a small state file for shards already completed '
+                         'in a previous pass instead of re-hashing them. Safe to call repeatedly '
+                         'as more archives arrive one at a time. Use only when the destination '
+                         'disk cannot hold the ZIPs and the restored payload at the same time; '
+                         'once a shard is recorded complete this mode can no longer re-detect '
+                         'later tampering with that shard, because its archive is gone.')
     args = p.parse_args()
-    restore(args.archives / 'payload_manifest.json', args.archives, args.output)
+    restore(args.archives / 'payload_manifest.json', args.archives, args.output,
+            delete_after_restore=args.delete_after_restore)
