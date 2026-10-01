@@ -12,6 +12,7 @@
 | 데이터·초기 가중치 | index/qpos/False norm 해시와 공식 base의 29개 파일 해시 확인 |
 | 별도 Git clone 경로 | 새 clone과 독립 venv에서도 실제 데이터 preflight 통과 |
 | Docker Compose | 공식 Compose v2.39.2 바이너리의 config 검사 통과 |
+| 전달용 빌드 도구 | 셸 문법 검사 통과; 새 CPU 검사 스크립트가 별도 Python3.11.13 고정 의존성 환경에서 통과. 실제 컨테이너에서의 실행은 아직 미검증 |
 | Docker base | Python3.11.11 slim-bookworm의 linux/amd64 manifest digest 고정 |
 | 원래 학습 | 원본 frozen source hash 불일치 0, 작업2350262 유지 |
 | 실제 Docker build/run | **미실행: 준비 서버에 Docker 엔진 없음** |
