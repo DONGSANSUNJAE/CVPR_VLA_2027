@@ -117,9 +117,14 @@ GitHub/이미지에 포함됩니다. 기존 fine-tuned 체크포인트는 필요
 ## 5. 최종 A100 서버에서 이미지 불러오기·학습 시작
 
 요구 조건: 한 Linux x86_64 서버의 **A100 80GB 4장**, 호환 NVIDIA 드라이버,
-Docker Engine, Compose v2.30 이상, NVIDIA Container Toolkit. 이미지의 CUDA
+Docker Engine, Compose v2.33 이상 (`docker compose run --pull`은 v2.33.0부터 지원), NVIDIA Container Toolkit, 그리고 아래 복원·
+검사 명령에 쓰이는 **Git, Python 3.9 이상, sha256sum**. 이미지의 CUDA
 라이브러리가 호스트 드라이버 설치를 대신하지 않습니다.
 [NVIDIA Container Toolkit 설치](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+호스트에 A100이 4장보다 많다면 `docker compose run`/`up`이 호출하는 컨테이너에는
+정확히 4장만 보이게 됩니다 (`compose.yaml`의 `gpus: - count: 4`). 4장 미만이면
+`gpu-check`가 즉시 실패합니다.
 
 학습용 CPU RAM은160GB 이상, 압축본·데이터·중간 체크포인트를 함께 유지할
 여유 디스크는2TB 이상을 권장합니다. 실제 GPU 학습 메모리·속도는 아직 실측하지
@@ -162,6 +167,26 @@ docker compose logs -f --tail 50 train
 이미지를 받은 서버에서는 빌드를 다시 실행하는 `tools/start.sh` 대신 위의
 `up --no-build --pull never` 명령을 사용합니다. 이미지 로드·ID 확인이 성공해야
 하며, 실행 로그에서 실제 첫 optimizer 업데이트와 체크포인트 저장을 확인해야 합니다.
+
+### 5-alt. tar 대신 GHCR에서 이미지를 받는 경우
+
+`tools/build_export_image.sh`를 수동으로 돌리는 대신, GitHub Actions
+(`.github/workflows/build-image.yml`, `workflow_dispatch`로 수동 실행)가 같은
+빌드·CPU 검사를 수행하고 이미지를 GHCR에 올립니다. 이 경우 위의
+`sha256sum -c` / `docker image load` 대신 아래를 씁니다. `<repo>`와 `<digest>`는
+해당 실행의 `ghcr_image.json` 아티팩트에 있는 `repository`/`manifest_digest` 값을
+그대로 사용합니다 (태그가 아니라 digest로 고정해야 내용이 바뀌지 않습니다).
+
+```bash
+docker pull <repo>@sha256:<digest>
+docker image tag <repo>@sha256:<digest> pi05-robotwin-false:60k
+docker image inspect pi05-robotwin-false:60k --format '{{.Id}}'
+# 위 ID를 ghcr_image.json의 local_image_id와 대조
+```
+
+이후 `source_commit.txt` 대신 `ghcr_image.json`의 `source_commit` 값으로
+`git checkout --detach`하고, 나머지 복원·preflight·gpu-check·학습 시작 명령은
+동일합니다. GHCR 패키지가 private이면 먼저 `docker login ghcr.io`가 필요합니다.
 
 CPU 데이터 검사는 전체 인덱스·정규화·base 해시 및50과제 입력을 검사합니다.
 GPU 기초 검사도 전체 모델의 첫 학습 업데이트를 대신하지 않습니다.

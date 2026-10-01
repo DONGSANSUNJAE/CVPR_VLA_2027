@@ -1,0 +1,148 @@
+# Build the RoboTwin pi0.5 training image on a GitHub-hosted linux/amd64 runner,
+# run the same CPU-only smoke check as the manual handoff, and publish the image
+# to GHCR. No GPU, training data, base weights, tokenizer or Hub token is used.
+#
+# This runs the committed tools/build_export_image.sh unchanged, so a green run
+# is direct evidence that the documented handoff procedure works end to end.
+name: build-pi05-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_to_ghcr:
+        description: 'Push the built image to GHCR'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-pi05-image
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+    working-directory: pi05_robotwin_docker
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out the exact source commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk space
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache || true
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Record builder environment
+        run: |
+          set -euo pipefail
+          docker info
+          docker buildx version
+          git rev-parse HEAD
+          git status --porcelain --untracked-files=normal
+
+      # Runs the committed handoff tool unchanged: buildx --platform linux/amd64
+      # --load, the CPU smoke check, docker image save, and the record files.
+      - name: Build, CPU-smoke-check and export
+        run: bash tools/build_export_image.sh
+
+      - name: Show CPU smoke result
+        run: cat build/image_export/cpu_smoke.json
+
+      - name: Record image and archive sizes
+        id: sizes
+        run: |
+          set -euo pipefail
+          archive=build/image_export/pi05-robotwin-linux-amd64.tar
+          echo "archive_bytes=$(stat -c %s "$archive")" >> "$GITHUB_OUTPUT"
+          echo "image_bytes=$(docker image inspect pi05-robotwin-false:60k --format '{{.Size}}')" >> "$GITHUB_OUTPUT"
+          ls -l "$archive"
+          df -h /
+
+      - name: Log in to GHCR
+        if: inputs.push_to_ghcr
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Push to GHCR and record the manifest digest
+        id: push
+        if: inputs.push_to_ghcr
+        run: |
+          set -euo pipefail
+          repository="ghcr.io/$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/pi05-robotwin-false"
+          docker image tag pi05-robotwin-false:60k "$repository:60k"
+          docker image tag pi05-robotwin-false:60k "$repository:${GITHUB_SHA}"
+          docker image push "$repository:60k"
+          docker image push "$repository:${GITHUB_SHA}"
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repository:60k" \
+                    | sed -n "s#^${repository}@##p" | head -1)"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          python3 - "$repository" "$digest" <<'PY'
+          import json, os, subprocess, sys
+          repository, digest = sys.argv[1], sys.argv[2]
+          image_id = subprocess.check_output(
+              ['docker', 'image', 'inspect', 'pi05-robotwin-false:60k', '--format', '{{.Id}}'], text=True).strip()
+          path = 'build/image_export/ghcr_image.json'
+          with open(path, 'w') as handle:
+              json.dump({
+                  'registry_reference': f'{repository}@{digest}',
+                  'repository': repository,
+                  'tags': ['60k', os.environ['GITHUB_SHA']],
+                  'manifest_digest': digest,
+                  'local_image_id': image_id,
+                  'source_commit': os.environ['GITHUB_SHA'],
+                  'platform': 'linux/amd64',
+                  'built_by': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                  'cpu_smoke': 'passed',
+                  'gpu_training_tested': False,
+                  'raw_data_and_base_weights_included': False,
+              }, handle, indent=2)
+              handle.write('\n')
+          print(open(path).read())
+          PY
+
+      - name: Publish a run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo '## pi0.5 RoboTwin image build'
+            echo
+            echo "- source commit: \`${GITHUB_SHA}\`"
+            echo "- image size: ${{ steps.sizes.outputs.image_bytes }} bytes"
+            echo "- docker save archive: ${{ steps.sizes.outputs.archive_bytes }} bytes"
+            echo "- GHCR: \`${{ steps.push.outputs.repository }}@${{ steps.push.outputs.digest }}\`"
+            echo
+            echo 'CPU smoke check only. GPU training and A100 execution remain untested.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The multi-GB docker save archive is deliberately not uploaded; the image
+      # is delivered through GHCR and identified by its manifest digest.
+      - name: Upload build records
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: pi05-image-records-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            pi05_robotwin_docker/build/image_export
+            !pi05_robotwin_docker/build/image_export/pi05-robotwin-linux-amd64.tar

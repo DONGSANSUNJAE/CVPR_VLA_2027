@@ -3,7 +3,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import sys
 import zipfile
+
+if sys.version_info < (3, 9):
+    raise SystemExit(
+        f'Python 3.9+ required (PurePath.is_relative_to); found {sys.version.split()[0]}. '
+        'Install a newer python3 on this host before restoring the payload.'
+    )
 
 
 def digest(path):

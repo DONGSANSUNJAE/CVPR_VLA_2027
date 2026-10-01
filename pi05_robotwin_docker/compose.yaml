@@ -2,7 +2,8 @@ services:
   train:
     build: .
     image: pi05-robotwin-false:60k
-    gpus: all
+    gpus:
+      - count: 4  # exactly four devices even if the host exposes more
     shm_size: '32gb'
     init: true
     stop_grace_period: 30m

@@ -8,11 +8,18 @@
 [빌드 담당자 전달 안내서](DOCKER_BUILD_HANDOFF_KO.md)를 사용한다.
 GPU·학습 데이터 없이 `bash tools/build_export_image.sh`로 빌드·CPU 검사·이미지
 내보내기를 수행하며, 최종 A100 서버에서는 받은 이미지를 `--no-build`로 실행한다.
+GitHub Actions로 GHCR에 올린 이미지가 있다면 `docker pull`로 받아 같은 방식으로
+실행한다 (아래 "전달받은 이미지 사용" 참고).
+
+**중요:** 아래 "새 서버에서 시작"은 **이 서버에서 직접 이미지를 빌드하는** 경로다.
+전달받은 tar 또는 GHCR 이미지가 이미 있다면 이 섹션의 `bash tools/start.sh`와
+`docker compose build`를 실행하지 말 것 — 둘 다 전달받은 이미지를 조용히
+재빌드해 덮어쓰며, SHA256SUMS/image_manifest.json의 image_id 검증이 무의미해진다.
 
 ## 실행 준비
 
 - Linux x86_64, 한 서버의 **A100 80GB 4장**. 이 네 장이 컨테이너에 보여야 한다.
-- Docker Engine, Compose v2.30 이상, NVIDIA Container Toolkit, 호스트 GPU 드라이버.
+- Docker Engine, Compose v2.33 이상 (`docker compose run --pull`은 v2.33.0부터 지원), NVIDIA Container Toolkit, 호스트 GPU 드라이버.
   CUDA 12.8 wheel 환경이며 GPU 런타임 검사는 아래 명령으로 별도 수행한다.
 - CPU RAM은 160GB 이상을 권장한다. 실제 최대치는 첫 모델 초기화 후 확인한다.
 - 저장 공간: 원본 데이터·가중치 합계 약 **514.4 GiB**. 압축본을 함께 보관하고
@@ -23,9 +30,40 @@ GPU·학습 데이터 없이 `bash tools/build_export_image.sh`로 빌드·CPU �
 호스트의 드라이버와 Docker/NVIDIA 런타임 설치는 컨테이너 안에서 대신할 수 없다.
 [NVIDIA 설치 문서](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
-## 새 서버에서 시작
+## 전달받은 이미지 사용 (빌드하지 않음)
 
-GitHub 저장소에서 학습 폴더로 이동한다.
+전달받은 tar 또는 GHCR 이미지가 있으면 이 블록만 실행한다. `build:` 지시자가
+있어도 `--no-build --pull never`가 재빌드·재다운로드를 모두 막는다.
+
+```bash
+git clone https://github.com/DONGSANSUNJAE/CVPR_VLA_2027.git
+cd CVPR_VLA_2027/pi05_robotwin_docker
+
+# (A) 전달받은 tar가 있는 경우
+sha256sum -c /path/to/image_export/SHA256SUMS
+docker image load --input /path/to/image_export/pi05-robotwin-linux-amd64.tar
+
+# (A') 또는 GHCR에서 받는 경우 — ghcr_image.json의 registry_reference를 그대로 사용
+docker pull ghcr.io/dongsansunjae/cvpr_vla_2027/pi05-robotwin-false@sha256:<digest>
+docker image tag ghcr.io/dongsansunjae/cvpr_vla_2027/pi05-robotwin-false@sha256:<digest> \
+  pi05-robotwin-false:60k
+
+# 둘 다 공통: image_id가 image_manifest.json / ghcr_image.json과 일치하는지 확인
+docker image inspect pi05-robotwin-false:60k --format '{{.Id}}'
+
+python3 tools/restore_payload.py --archives /path/to/archives --output payload
+python3 tools/check_payload.py
+
+mkdir -p outputs
+docker compose run --rm --no-deps --pull never train preflight
+docker compose run --rm --no-deps --pull never train gpu-check
+docker compose up -d --no-build --pull never train
+docker compose logs -f --tail 50 train
+```
+
+## 새 서버에서 시작 (이 서버에서 직접 빌드)
+
+전달받은 이미지가 없을 때만 쓴다. GitHub 저장소에서 학습 폴더로 이동한다.
 
 ```bash
 git clone https://github.com/DONGSANSUNJAE/CVPR_VLA_2027.git
