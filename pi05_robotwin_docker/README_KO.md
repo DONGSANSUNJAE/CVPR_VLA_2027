@@ -171,6 +171,30 @@ A100 allocation이 없어 여기에서 Docker build/run 또는 A100 학습 속�
 재현용이며, 기존 서버의 실제 RoboTwin 영상 평가 환경·시뮬레이터 자산은 이번
 학습 payload에 포함하지 않았다. 수치 재현을 실제 영상 평가 완료로 보고하지 않는다.
 
+## VESSL Cloud 커스텀 이미지로 사용
+
+VESSL Cloud Workspace의 "Container image" 탭에서 **Custom**을 선택하면
+"custom image must include SSHD and Python"이라는 안내가 뜬다. 이 이미지는
+`openssh-server`·`curl`과 Python(시스템/venv 둘 다)을 포함하므로 그대로 쓸 수 있다.
+
+- **Custom image URI**: GHCR에 올린 이미지 참조
+  (`.github/workflows/build-image.yml` 실행 후 아티팩트의 `ghcr_image.json`에
+  있는 `registry_reference`, 예: `ghcr.io/dongsansunjae/cvpr_vla_2027/pi05-robotwin-false@sha256:<digest>`).
+  GHCR 패키지가 private이면 VESSL이 pull할 수 있어야 하므로 먼저 public으로
+  바꾸거나 VESSL 쪽에 레지스트리 인증 수단이 있는지 확인한다.
+- **Start/실행 command**: `idle` 모드로 띄운다 — `python /opt/pi05/entrypoint.py idle`.
+  기본 CMD(`train`)로 그대로 두면 payload가 없는 workspace에서 즉시
+  `FileNotFoundError`로 죽어 SSH 접속 자체가 안 된다. `idle`은 데이터·GPU를
+  전혀 건드리지 않고 `sshd -D`만 foreground로 띄운다.
+- VESSL이 공개 키를 어디에 주입하는지는 공식 문서에 명시돼 있지 않다. sshd는
+  배포판 기본 설정(루트는 공개키 로그인 허용, 비밀번호 로그인은 기본 비활성)을
+  그대로 쓰고, `/root/.ssh`를 0700으로 미리 만들어 둔다 — VESSL이 여기에
+  `authorized_keys`를 쓰는 방식이라면 바로 동작한다. 접속 후 데이터 복원·학습은
+  워크스페이스 안에서 이 문서의 §"새 서버에서 시작" 명령을 그대로 수동 실행한다.
+- (참고) 이전 VESSL 제품 문서에는 Jupyter(`/usr/local/bin/jupyter`, 포트8888)도
+  요구한다고 돼 있었다 — 지금 이미지에는 넣지 않았다. workspace UI에 Jupyter
+  연결 탭도 있다면 알려주면 `jupyterlab`을 추가한다.
+
 ## 코드 출처
 
 - `app/openpi_snapshot`: 기존 실험에서 고정한 공개 OpenPI 코드. 원 라이선스 포함.

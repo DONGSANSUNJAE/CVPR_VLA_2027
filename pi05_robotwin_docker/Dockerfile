@@ -1,6 +1,11 @@
 FROM python:3.11.11-slim-bookworm@sha256:a8e0a3090316aed0b11037aac613aef32fb1747dcc1dcb5c0f6c727a0113a07f
+# openssh-server + curl: required by remote-workspace platforms (e.g. a VESSL
+# Cloud custom image) that expect SSHD and a health-check client in the image;
+# unused by, and harmless to, the batch-job docker-compose path below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 libgl1 libgomp1 ca-certificates \
+    libglib2.0-0 libgl1 libgomp1 ca-certificates openssh-server curl \
+    && mkdir -p /run/sshd && ssh-keygen -A \
+    && mkdir -m 0700 -p /root/.ssh \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:/opt/venv/lib/python3.11/site-packages/nvidia/cuda_nvcc/bin:${PATH}"
@@ -20,6 +25,7 @@ ENV PYTHONPATH="/opt/pi05:/opt/pi05/scripts:/opt/pi05/openpi_snapshot/src:/opt/p
     OPENPI_DATA_HOME=/opt/pi05/output/cache/openpi \
     XLA_PYTHON_CLIENT_MEM_FRACTION=.90 XLA_PYTHON_CLIENT_PREALLOCATE=true
 WORKDIR /opt/pi05
+EXPOSE 22
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["python", "/opt/pi05/entrypoint.py"]
 CMD ["train"]

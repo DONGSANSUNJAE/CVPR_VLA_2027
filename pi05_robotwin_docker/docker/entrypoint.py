@@ -1,4 +1,11 @@
-"""One-container training, validation, graceful stop and same-recipe resume."""
+"""One-container training, validation, graceful stop and same-recipe resume.
+
+`idle` is a separate, payload-free mode for interactive remote-workspace
+platforms (e.g. a VESSL Cloud custom workspace image): it only starts sshd
+and otherwise does nothing, so the container stays up with no data, base
+weights or GPUs mounted and a user can SSH in and drive training by hand.
+It never touches /opt/pi05/data, /opt/pi05/manifests or nvidia-smi.
+"""
 import json
 import os
 from pathlib import Path
@@ -9,10 +16,24 @@ import sys
 ROOT = Path('/opt/pi05')
 
 
+def run_idle():
+    """Start sshd in the foreground; used only for interactive workspace images."""
+    Path('/run/sshd').mkdir(parents=True, exist_ok=True)
+    ssh_dir = Path('/root/.ssh')
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(ssh_dir, 0o700)
+    subprocess.run(['ssh-keygen', '-A'], check=True)
+    print('PI05_IDLE: sshd starting on :22; no payload/GPU checks run in this mode', flush=True)
+    os.execv('/usr/sbin/sshd', ['/usr/sbin/sshd', '-D', '-e'])
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'train'
-    if mode not in {'train', 'preflight', 'gpu-check'}:
-        raise SystemExit('Usage: train | preflight | gpu-check')
+    if mode not in {'train', 'preflight', 'gpu-check', 'idle'}:
+        raise SystemExit('Usage: train | preflight | gpu-check | idle')
+    if mode == 'idle':
+        run_idle()
+        return
     for name in ('logs', 'manifests', 'cache'):
         (ROOT / 'output' / name).mkdir(parents=True, exist_ok=True)
     for source in (ROOT / 'frozen_manifests').iterdir():
