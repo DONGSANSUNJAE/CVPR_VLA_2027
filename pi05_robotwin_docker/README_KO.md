@@ -209,6 +209,30 @@ VESSL Cloud Workspace의 "Container image" 탭에서 **Custom**을 선택하면
   요구한다고 돼 있었다 — 지금 이미지에는 넣지 않았다. workspace UI에 Jupyter
   연결 탭도 있다면 알려주면 `jupyterlab`을 추가한다.
 
+## 예상 완료 시각
+
+실행 중인 VESSL 학습의 예상 완료 시각은 CPU 전용 `tools/training_eta.py`로
+확인한다. 원본 학습 로그는 수정하지 않고 `train_status_eta.json`과
+`metrics_eta.jsonl`을 같은 로그 폴더에 쓴다. 학습 재시작은 필요 없다.
+
+```bash
+nohup /opt/venv/bin/python -u tools/training_eta.py --watch \
+  > /HW/pi05_robotwin_false_60k/outputs/logs/eta_monitor.log 2>&1 < /dev/null &
+cat /HW/pi05_robotwin_false_60k/outputs/logs/train_status_eta.json
+tail -n 5 /HW/pi05_robotwin_false_60k/outputs/logs/metrics_eta.jsonl
+```
+
+`estimated_remaining`은 남은 시간, `estimated_finish_kst`는 한국시간 완료
+예정 시각이다. 관측 시작·프로세스 변경 뒤 첫 로그 구간은 제외하고 새 구간의
+최소20개 업데이트가 모이면 최근 최대100개 업데이트의 가중 평균으로 계산한다.
+따라서 보통 관측 시작 뒤30스텝가량부터 ETA가 나온다. 초기 컴파일은 제외한다.
+마지막 체크포인트 저장 대기와 향후 중단 시간은 예측에 포함하지 않는다.
+`metrics_eta.jsonl`은 원본 지표에 ETA를 붙인 **관측 기록**이다. 관측을 시작한
+시점부터 기록하며, 중단 등 상태 변경 시 같은 스텝이 다시 기록될 수 있다.
+학습 프로세스가 없거나 실패·장시간 진전 없음이면 완료 시각을 비운다.
+상태 JSON이 오래된 경우 `launch.log`의 더 최신 상태 이벤트를 사용한다.
+Pause로 이 관측기도 종료되면 다시 실행해야 한다.
+
 ## 코드 출처
 
 - `app/openpi_snapshot`: 기존 실험에서 고정한 공개 OpenPI 코드. 원 라이선스 포함.
