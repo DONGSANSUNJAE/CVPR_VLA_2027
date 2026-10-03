@@ -189,8 +189,22 @@ VESSL Cloud Workspace의 "Container image" 탭에서 **Custom**을 선택하면
 - VESSL이 공개 키를 어디에 주입하는지는 공식 문서에 명시돼 있지 않다. sshd는
   배포판 기본 설정(루트는 공개키 로그인 허용, 비밀번호 로그인은 기본 비활성)을
   그대로 쓰고, `/root/.ssh`를 0700으로 미리 만들어 둔다 — VESSL이 여기에
-  `authorized_keys`를 쓰는 방식이라면 바로 동작한다. 접속 후 데이터 복원·학습은
-  워크스페이스 안에서 이 문서의 §"새 서버에서 시작" 명령을 그대로 수동 실행한다.
+  `authorized_keys`를 쓰는 방식이라면 바로 동작한다.
+- 이미 이 커스텀 이미지로 실행 중인 VESSL 컨테이너에서는 Docker를 다시 실행하지
+  않는다. 복원이 끝난 `/HW/pi05_robotwin_false_60k/payload`를 사용해 아래 실행기를
+  호출한다. 입력·GPU 검사 실패 시 학습을 시작하지 않으며 중복 실행을 차단한다.
+
+  ```bash
+  bash tools/start_vessl.sh
+  tail -n 60 -f /HW/pi05_robotwin_false_60k/outputs/logs/launch.log
+  ```
+
+  코드·venv는 이미지의 `/opt/pi05`, `/opt/venv`를 사용한다. 체크포인트와 로그는
+  `/HW/pi05_robotwin_false_60k/outputs`에 저장한다. 기존 경로가 다른 파일을 담고
+  있으면 덮어쓰지 않고 중단한다. SSH 종료 후에도 계속 실행되지만 workspace의
+  Pause/종료 후에는 계속되지 않는다. 현재 `/HW`는 object storage이므로 데이터
+  읽기·체크포인트 저장 속도는 실제 실행에서 확인해야 한다. 실행기 구문과 경로
+  연결·재실행·충돌 거부 검사는 통과했으며 실제 A100 학습 검증은 별도다.
 - (참고) 이전 VESSL 제품 문서에는 Jupyter(`/usr/local/bin/jupyter`, 포트8888)도
   요구한다고 돼 있었다 — 지금 이미지에는 넣지 않았다. workspace UI에 Jupyter
   연결 탭도 있다면 알려주면 `jupyterlab`을 추가한다.
